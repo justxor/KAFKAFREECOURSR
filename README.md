@@ -21,7 +21,8 @@ Producer
 | KRaft metadata quorum |
 +-----------------------+
    |
-   v
+   v[Kafka_4x_Course_Introduction_README.md](https://github.com/user-attachments/files/31864750/Kafka_4x_Course_Introduction_README.md)
+
 Consumer Group
 ```
 
@@ -49,7 +50,1298 @@ Consumer Group
 ⚡ [Machine Learning](https://t.me/+gRRiZ6J044BmNGNi) - ИИ, разбор моделей машинного обучение, rag, современные LLM, объясняем на пальцах ка
 
 🎁 [Продвинутый DEVOPS](https://t.me/addlist/MUtJEeJSxeY2YTFi) - собрали для вас лучшие ресурсы по DEVOPS на любой вкус в одной папке.
-## 1. Kafka - не просто очередь сообщений
+
+## 1. Kafka - не просто очередь с# Apache Kafka 4.x - продвинутый практический курс
+
+> Введение. Что такое Kafka, зачем она нужна, где применяется, как устроена и как запустить её локально.
+
+---
+
+# 0. Что вообще такое Apache Kafka
+
+Apache Kafka - это распределённая платформа для передачи, хранения и обработки потоков событий.
+
+Проще всего начать с обычной ситуации.
+
+Допустим, у нас интернет-магазин.
+
+Пользователь оформляет заказ:
+
+```text
+OrderCreated
+```
+
+После этого сразу несколько систем должны что-то сделать:
+
+```text
+                    +--> Payment Service
+                    |
+Order Service ------+--> Warehouse
+                    |
+                    +--> Analytics
+                    |
+                    +--> Notification Service
+                    |
+                    +--> Fraud Detection
+```
+
+Без Kafka Order Service может напрямую обращаться ко всем этим системам.
+
+Например:
+
+```text
+Order Service
+   |
+   +--> POST /payment
+   +--> POST /warehouse
+   +--> POST /analytics
+   +--> POST /notification
+   +--> POST /fraud
+```
+
+На маленьком проекте это работает.
+
+Но дальше начинаются проблемы.
+
+Если Notification Service недоступен:
+
+```text
+что делать с заказом?
+```
+
+Если Analytics работает медленно:
+
+```text
+должно ли оформление заказа ждать?
+```
+
+Если завтра появляется ещё десять сервисов:
+
+```text
+нужно менять Order Service?
+```
+
+Если один сервис хочет перечитать события за вчера:
+
+```text
+где их взять?
+```
+
+Именно здесь появляется Kafka.
+
+---
+
+# 1. Kafka как промежуточный журнал событий
+
+С Kafka архитектура становится такой:
+
+```text
+Order Service
+     |
+     | OrderCreated
+     v
++--------------------+
+|       Kafka        |
+| topic: orders      |
++--------------------+
+   |       |       |
+   v       v       v
+Payment Warehouse Analytics
+```
+
+Order Service больше не обязан знать обо всех consumers.
+
+Он просто сообщает:
+
+```text
+"Заказ 123 создан"
+```
+
+и записывает событие в Kafka.
+
+Остальные системы читают его независимо.
+
+---
+
+# 2. Kafka - это не просто очередь
+
+Kafka часто называют message queue.
+
+Это удобно для первого объяснения, но технически не совсем точно.
+
+Классическая очередь часто выглядит так:
+
+```text
+Producer
+   |
+   v
+Queue
+   |
+   v
+Consumer
+```
+
+Consumer забрал сообщение:
+
+```text
+message removed
+```
+
+В Kafka сообщение после чтения обычно не исчезает.
+
+Kafka хранит события определённое время.
+
+Например:
+
+```text
+orders
+
+offset 0 -> OrderCreated
+offset 1 -> OrderPaid
+offset 2 -> OrderPacked
+offset 3 -> OrderShipped
+```
+
+Consumer просто запоминает:
+
+```text
+я дочитал до offset 3
+```
+
+Поэтому Kafka удобнее представлять как:
+
+```text
+распределённый append-only log
+```
+
+---
+
+# 3. Почему это настолько полезно
+
+Допустим Analytics Service был выключен 6 часов.
+
+За это время в Kafka накопилось:
+
+```text
+100 000 событий
+```
+
+После запуска Analytics может продолжить чтение с последнего сохранённого offset.
+
+```text
+Kafka
+
+1
+2
+3
+4
+5
+...
+100000
+       ^
+       |
+Analytics продолжает отсюда
+```
+
+Producer при этом ничего не должен повторно отправлять вручную.
+
+---
+
+# 4. Реальный пример без Kafka
+
+Представим backend приложения такси.
+
+После завершения поездки нужно:
+
+```text
+1. списать деньги
+2. начислить бонусы
+3. отправить чек
+4. обновить аналитику
+5. обновить рейтинг водителя
+6. сохранить данные для ML
+```
+
+Прямая архитектура:
+
+```text
+Trip Service
+ |
+ +--> Billing
+ +--> Loyalty
+ +--> Email
+ +--> Analytics
+ +--> Driver Rating
+ +--> ML Pipeline
+```
+
+Теперь Billing отвечает 10 секунд.
+
+Trip Service начинает ждать.
+
+Analytics упал.
+
+Нужно решить:
+
+```text
+считать поездку завершённой или нет?
+```
+
+Добавился новый ML сервис.
+
+Нужно снова менять Trip Service.
+
+Это сильная связанность:
+
+```text
+tight coupling
+```
+
+---
+
+# 5. С Kafka
+
+```text
+Trip Service
+     |
+     | TripCompleted
+     v
++------------------------+
+| Kafka                  |
+| topic: trips           |
++------------------------+
+  |    |    |    |    |
+  v    v    v    v    v
+Bill Loyalty Mail BI   ML
+```
+
+Trip Service знает только Kafka.
+
+Consumers могут:
+
+```text
+падать
+обновляться
+масштабироваться
+читать повторно
+обрабатывать с разной скоростью
+```
+
+независимо друг от друга.
+
+---
+
+# 6. Что такое event
+
+Event - факт, который уже произошёл.
+
+Например:
+
+```json
+{
+  "event_type": "OrderPaid",
+  "order_id": "12345",
+  "user_id": "42",
+  "amount": 1999,
+  "currency": "RUB",
+  "timestamp": "2026-09-05T12:00:00Z"
+}
+```
+
+Правильный смысл:
+
+```text
+Заказ 12345 был оплачен.
+```
+
+Это уже произошедший факт.
+
+---
+
+# 7. Event и command - не одно и то же
+
+Command:
+
+```text
+ChargeCustomer
+```
+
+означает:
+
+```text
+сделай что-то
+```
+
+Event:
+
+```text
+CustomerCharged
+```
+
+означает:
+
+```text
+что-то уже произошло
+```
+
+В event-driven архитектуре это важное различие.
+
+---
+
+# 8. Где Kafka реально используют
+
+Kafka особенно полезна там, где есть большой поток событий.
+
+## Микросервисы
+
+```text
+orders
+payments
+shipments
+notifications
+```
+
+## Аналитика
+
+```text
+clicks
+views
+purchases
+searches
+```
+
+## Логи
+
+```text
+application logs
+security events
+audit logs
+```
+
+## IoT
+
+```text
+temperature
+GPS
+sensor data
+device events
+```
+
+## Финансы
+
+```text
+transactions
+payments
+fraud events
+market data
+```
+
+## CDC
+
+Изменения базы данных:
+
+```text
+PostgreSQL
+   |
+   v
+Debezium
+   |
+   v
+Kafka
+```
+
+## Machine Learning
+
+```text
+user activity
+     |
+     v
+Kafka
+     |
+     +--> feature pipeline
+     +--> fraud model
+     +--> recommendations
+```
+
+---
+
+# 9. Когда Kafka не нужна
+
+Kafka не нужно добавлять в каждый проект.
+
+Если приложение:
+
+```text
+один backend
+одна база
+100 пользователей
+несколько запросов в секунду
+```
+
+Kafka может только усложнить архитектуру.
+
+Появятся:
+
+```text
+brokers
+topics
+partitions
+replication
+monitoring
+schema management
+consumer lag
+deployments
+storage
+security
+```
+
+Для простого проекта обычного PostgreSQL + background jobs иногда достаточно.
+
+---
+
+# 10. Когда Kafka действительно полезна
+
+Kafka стоит использовать, когда появляются задачи:
+
+```text
+много producers
+много consumers
+большой поток событий
+независимое масштабирование
+replay данных
+отказоустойчивость
+event-driven architecture
+stream processing
+```
+
+---
+
+# 11. Основные компоненты Kafka
+
+Теперь введём главные понятия.
+
+```text
+Producer
+   |
+   v
+Topic
+   |
+   v
+Partition
+   |
+   v
+Broker
+   |
+   v
+Consumer
+```
+
+---
+
+# 12. Producer
+
+Producer - программа, которая пишет события в Kafka.
+
+Например:
+
+```text
+Order Service
+```
+
+отправляет:
+
+```text
+OrderCreated
+```
+
+или:
+
+```text
+OrderPaid
+```
+
+---
+
+# 13. Consumer
+
+Consumer - приложение, которое читает события.
+
+Например:
+
+```text
+Notification Service
+```
+
+читает:
+
+```text
+OrderPaid
+```
+
+и отправляет письмо.
+
+---
+
+# 14. Topic
+
+Topic - логическая категория событий.
+
+Например:
+
+```text
+orders
+payments
+users
+notifications
+```
+
+Можно представить topic как поток:
+
+```text
+orders
+
+OrderCreated
+OrderPaid
+OrderPacked
+OrderShipped
+OrderCancelled
+```
+
+---
+
+# 15. Broker
+
+Broker - сервер Kafka.
+
+Один Kafka cluster обычно состоит из нескольких brokers:
+
+```text
+Kafka Cluster
+
+broker-1
+broker-2
+broker-3
+```
+
+Каждый broker хранит часть partitions.
+
+---
+
+# 16. Partition
+
+Topic делится на partitions.
+
+Например:
+
+```text
+topic: orders
+
+partition 0
+partition 1
+partition 2
+```
+
+Это позволяет Kafka масштабироваться горизонтально.
+
+---
+
+# 17. Почему partition важнее topic
+
+На практике Kafka работает не просто с topic.
+
+Основная единица хранения:
+
+```text
+topic + partition
+```
+
+Например:
+
+```text
+orders-0
+orders-1
+orders-2
+```
+
+Каждая partition является отдельным упорядоченным log.
+
+---
+
+# 18. Offset
+
+Внутри partition каждому record присваивается номер:
+
+```text
+offset
+```
+
+Например:
+
+```text
+partition 0
+
+offset 0 -> A
+offset 1 -> B
+offset 2 -> C
+offset 3 -> D
+```
+
+Offset - позиция записи внутри partition.
+
+---
+
+# 19. Consumer Group
+
+Допустим есть:
+
+```text
+6 partitions
+```
+
+И три экземпляра приложения:
+
+```text
+consumer-1
+consumer-2
+consumer-3
+```
+
+Они могут образовать:
+
+```text
+consumer group
+```
+
+Kafka распределит partitions между ними.
+
+---
+
+# 20. Зачем Kafka хранит сообщения
+
+Это одно из главных отличий Kafka.
+
+Consumer может:
+
+```text
+прочитать сообщение сегодня
+```
+
+а другой consumer:
+
+```text
+прочитать его завтра
+```
+
+Можно даже сделать replay:
+
+```text
+переместить offset назад
+```
+
+и снова обработать старые события.
+
+---
+
+# 21. Где replay полезен
+
+Представим, что ты написал новый recommendation algorithm.
+
+В Kafka есть события пользователей за семь дней.
+
+Вместо ожидания новых данных можно:
+
+```text
+перечитать старые события
+```
+
+новой версией consumer.
+
+---
+
+# 22. Kafka как буфер между системами
+
+Producer создаёт:
+
+```text
+100 000 msg/sec
+```
+
+Consumer способен обработать:
+
+```text
+50 000 msg/sec
+```
+
+Kafka может временно накопить backlog.
+
+```text
+Producer
+100k/s
+   |
+   v
+Kafka
+████████████████
+   |
+   v
+Consumer
+50k/s
+```
+
+Consumer позже догоняет поток.
+
+---
+
+# 23. Что Kafka НЕ делает автоматически
+
+Kafka не решает автоматически:
+
+```text
+бизнес-логику
+идемпотентность приложения
+правильную схему событий
+архитектуру retry
+обработку poison messages
+monitoring
+security
+```
+
+Kafka даёт инфраструктурные механизмы.
+
+Корректность системы всё равно нужно проектировать.
+
+---
+
+# 24. Что установим для курса
+
+Нам понадобится:
+
+```text
+Docker
+Docker Compose
+Java 17+
+Git
+любая IDE
+```
+
+Самый простой вариант для курса - Docker.
+
+Для примеров используется официальный образ:
+
+```text
+apache/kafka:4.3.1
+```
+
+---
+
+# 25. Проверяем Docker
+
+```bash
+docker --version
+```
+
+Проверяем Compose:
+
+```bash
+docker compose version
+```
+
+---
+
+# 26. Самый быстрый запуск Kafka
+
+```bash
+docker pull apache/kafka:4.3.1
+```
+
+Запуск:
+
+```bash
+docker run -d \
+  --name kafka \
+  -p 9092:9092 \
+  apache/kafka:4.3.1
+```
+
+Проверяем:
+
+```bash
+docker ps
+```
+
+---
+
+# 27. Создаём первый topic
+
+```bash
+docker exec kafka \
+  /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:9092 \
+  --create \
+  --topic hello-kafka
+```
+
+---
+
+# 28. Проверяем topic
+
+```bash
+docker exec kafka \
+  /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:9092 \
+  --describe \
+  --topic hello-kafka
+```
+
+---
+
+# 29. Отправляем первое сообщение
+
+```bash
+docker exec -it kafka \
+  /opt/kafka/bin/kafka-console-producer.sh \
+  --bootstrap-server localhost:9092 \
+  --topic hello-kafka
+```
+
+После запуска введи:
+
+```text
+hello
+my first kafka event
+order-123 created
+```
+
+---
+
+# 30. Читаем события
+
+Во втором терминале:
+
+```bash
+docker exec -it kafka \
+  /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server localhost:9092 \
+  --topic hello-kafka \
+  --from-beginning
+```
+
+Ты увидишь:
+
+```text
+hello
+my first kafka event
+order-123 created
+```
+
+Это уже минимальная Kafka pipeline:
+
+```text
+Producer
+   |
+   v
+Kafka
+   |
+   v
+Consumer
+```
+
+---
+
+# 31. Что произошло внутри
+
+Когда ты ввёл:
+
+```text
+order-123 created
+```
+
+произошла цепочка:
+
+```text
+Console Producer
+      |
+      v
+Kafka Protocol
+      |
+      v
+Broker
+      |
+      v
+Topic
+      |
+      v
+Partition
+      |
+      v
+Log on disk
+```
+
+Consumer затем сделал fetch и прочитал record.
+
+---
+
+# 32. Где Kafka хранит эти данные
+
+Kafka пишет partition на диск.
+
+Упрощённо:
+
+```text
+data/
+└── hello-kafka-0/
+    ├── 00000000000000000000.log
+    ├── 00000000000000000000.index
+    └── ...
+```
+
+Kafka не просто пересылает сообщение между двумя приложениями.
+
+Она хранит его.
+
+---
+
+# 33. Почему курс начинается именно с архитектуры
+
+Можно быстро выучить команды:
+
+```bash
+kafka-topics.sh
+kafka-console-producer.sh
+kafka-console-consumer.sh
+```
+
+Но этого недостаточно.
+
+Большинство production-проблем Kafka связано не с синтаксисом команд.
+
+Они связаны с вопросами:
+
+```text
+почему вырос lag?
+почему появились duplicates?
+почему consumer rebalance?
+почему одна partition перегружена?
+почему broker потерял ISR?
+почему запись стала медленной?
+почему после увеличения partitions изменился ordering?
+```
+
+Чтобы отвечать на них, нужно понимать внутреннюю модель Kafka.
+
+---
+
+# 34. Как проходить этот курс
+
+Не просто читай главы.
+
+После каждого блока запускай команды.
+
+Хороший цикл обучения:
+
+```text
+прочитал
+↓
+запустил
+↓
+сломал
+↓
+посмотрел metrics/logs
+↓
+исправил
+↓
+объяснил себе почему
+```
+
+---
+
+# 35. Практическая философия курса
+
+Мы специально будем:
+
+```text
+убивать brokers
+останавливать consumers
+создавать lag
+создавать duplicates
+ломать ordering
+провоцировать rebalance
+заполнять producer buffer
+создавать hot partitions
+```
+
+Потому что Kafka лучше всего понимается через failure scenarios.
+
+---
+
+# 36. Что ты должен уметь после всего курса
+
+После прохождения курса ты должен уметь не просто сказать:
+
+```text
+"Я работал с Kafka"
+```
+
+а объяснить:
+
+```text
+как выбрать количество partitions
+
+как выбрать message key
+
+как работает replication
+
+что такое ISR
+
+как Kafka выбирает leader
+
+как producer batching влияет на latency
+
+как работает idempotent producer
+
+как появляются duplicates
+
+как правильно commit'ить offsets
+
+чем at-least-once отличается от exactly-once
+
+как работает consumer rebalance
+
+как расследовать consumer lag
+
+как найти hot partition
+
+как Kafka использует page cache
+
+как настроить retention и compaction
+
+как проектировать retry и DLT
+
+как мониторить Kafka
+
+как пережить падение broker
+
+как оценить capacity cluster
+```
+
+---
+
+# 37. Карта всего курса
+
+## Часть 1 - Kafka Fundamentals
+
+```text
+architecture
+KRaft
+brokers
+topics
+partitions
+replication
+ISR
+offsets
+consumer groups
+retention
+compaction
+```
+
+## Часть 2 - Producer & Consumer Internals
+
+```text
+batching
+RecordAccumulator
+compression
+retries
+idempotence
+fetch
+poll
+commits
+delivery semantics
+lag
+rebalance
+Consumer Group Protocol
+```
+
+## Часть 3 - Broker Internals & Performance
+
+```text
+log segments
+indexes
+page cache
+replication
+high watermark
+leader epoch
+disk I/O
+network threads
+request handlers
+capacity planning
+```
+
+## Часть 4 - Reliability
+
+```text
+transactions
+exactly-once
+retry
+DLT
+idempotency
+failure scenarios
+disaster recovery
+```
+
+## Часть 5 - Observability
+
+```text
+JMX
+Prometheus
+Grafana
+consumer lag
+under-replicated partitions
+ISR
+request latency
+disk pressure
+alerts
+```
+
+## Часть 6 - Production Architecture
+
+```text
+security
+TLS
+SASL
+ACL
+Schema Registry
+CDC
+Debezium
+Kafka Connect
+Kubernetes
+multi-region
+capacity planning
+```
+
+---
+
+# 38. Первый mental model
+
+На старте достаточно помнить одну схему:
+
+```text
+Producer
+   |
+   v
+Topic
+   |
+   v
+Partitions
+   |
+   v
+Kafka Brokers
+   |
+   v
+Consumer Group
+```
+
+Дальше весь курс будет постепенно раскрывать каждую стрелку этой схемы.
+
+---
+
+# 39. Почему не обычный HTTP
+
+Почему между сервисами вообще ставить Kafka, если можно сделать обычный HTTP?
+
+HTTP отлично подходит, когда нужен:
+
+```text
+request -> immediate response
+```
+
+Например:
+
+```text
+GET /users/42
+```
+
+Kafka полезнее, когда нужен:
+
+```text
+event happened
+↓
+несколько независимых систем могут обработать его сейчас или позже
+```
+
+Например:
+
+```text
+OrderPaid
+```
+
+Обе технологии часто используются одновременно.
+
+---
+
+# 40. HTTP и Kafka вместе
+
+Типичная production-архитектура:
+
+```text
+Client
+  |
+  | HTTP
+  v
+Order API
+  |
+  | Kafka event
+  v
+Kafka
+  |
+  +--> Analytics
+  +--> Notifications
+  +--> Warehouse
+  +--> Fraud
+```
+
+HTTP используется для synchronous request.
+
+Kafka - для asynchronous event propagation.
+
+---
+
+# Что дальше
+
+После этого введения переходим к первой части курса:
+
+```text
+Kafka Fundamentals
+```
+
+где подробно разберём:
+
+```text
+KRaft
+brokers
+topics
+partitions
+replication
+ISR
+leader election
+offsets
+consumer groups
+retention
+log compaction
+```
+
+А затем во второй части уйдём внутрь producer и consumer:
+
+```text
+batching
+compression
+retries
+idempotence
+poll
+commits
+delivery semantics
+lag
+rebalance
+```
+ообщений
 
 Частая ошибка:
 
